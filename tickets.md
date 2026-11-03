@@ -921,4 +921,72 @@ The code only makes the issue more visible: one network outage generates many re
 - The device gets a SPIFFE token again soon after network connectivity returns.
 - Launcher requests resume once the token becomes available.
 
+
+
+
+
+
+# TITLE: Support Service keeps asking the QA store-info server for stores 9771 and 7132, gets "not found" (404), and logs a big error every time
+
+## WHAT IS WRONG
+
+The Support Service app asks the store-info server for details of a store. For stores 9771 and 7132 the QA server answers "not found" (404).
+
+The app then asks again and again, and writes a full error each time.
+
+227 error rows in the log (24 Sep to 23 Oct 2026):
+
+- store 9771: 208 rows
+- store 7132: 19 rows
+
+Main devices:
+
+- 25147524201072 (77 rows)
+- 24198524213086 (57)
+- no device ID (54)
+- 25156524202317 (21)
+
+Separate, 20 more rows from the launcher "Unable to retrieve configuration from getStoreDetails":
+
+- network not available (7)
+- server problem (4)
+- 502 (1)
+
+These are network/server errors, not 404, and belong to the network/403 tickets.
+
+## WHY IT HAPPENS
+
+1\. `DeviceSessionProvider.kt` (`getSession`) asks the store-info server for the store's country and state, to choose the app language.
+
+2\. It picks the QA or production server from `/Bootstrap/bootstrap.json`.
+
+- If the file says "not production" (or has no `isProd` value), it uses the QA server.
+- If the file is missing, it uses Production.
+
+3\. The QA server says 404 for these two stores. Most likely they are not in the QA data. (NOT VERIFIED yet.)
+
+4\. The call is `URL(url).readText()` with no timeout. On 404 it throws, and the catch block logs the full stack trace as an error.
+
+5\. After a failure, the store number is not saved, so the next call asks the server again and logs the same error again. That is why one store gives many rows.
+
+6\. With no store info, the app uses the default language `en_US`. A Quebec store would need `fr_CA`. (From the code only; not seen in the log.)
+
+## NOT SURE YET
+
+- Do stores 9771 and 7132 exist in the QA store-info server? Ask the store-info team.
+- What is inside `bootstrap.json` on devices 25147524201072 and 24198524213086?
+- Why 54 rows have no device ID.
+
+## WHAT TO DO
+
+1. Ask the store-info team to add stores 9771 and 7132 to QA (or give valid QA test store numbers).
+2. After a failure, remember it and retry later with a delay, instead of calling every time.
+3. Log a 404 as one short warning, not a full stack trace at error level.
+4. Add a timeout (for example 10 seconds) to the call.
+
+## DONE WHEN
+
+One failure gives one short log line, QA stores return data, and the app does not stay on `en_US` by mistake.
+
+
   
