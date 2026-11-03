@@ -989,4 +989,111 @@ These are network/server errors, not 404, and belong to the network/403 tickets.
 One failure gives one short log line, QA stores return data, and the app does not stay on `en_US` by mistake.
 
 
+\===== TICKET 1 =====
+
+# TITLE: Normal "nothing saved yet" cases are logged as ERROR (about 1,350 rows) - change log level and fix wrong message
+
+## WHAT IS WRONG
+
+When the apps start for the first time (or after an install, update or cleared data) they look for a saved config. It is not there, so they use the built-in config. This is normal and works fine, but the apps log it as ERROR.
+
+About 1,350 of the 1,599 Config/File error rows (24 Sep to 30 Oct 2026) are this.
+
+## WHAT IS IN THE LOG
+
+1. "External storage not mounted and persistent cache not found, retrieving go init config from local resources." – 525 rows (Support Service, `InitConfigProvider`).
+2. "Attempted to load configuration from Shared Preferences at key: init.configuration but not found." – 263 rows (`InitConfigProvider`).
+3. "Unable to retrieve cached platform configuration from internal storage. java.io.FileNotFoundException ..." – 484 rows (Launcher, `LauncherUtils`).
+
+   Files: `PlatformConfig_41`, `PlatformConfig_21`, `ShellConfiguration`, `NotificationConfig`, `DockingConfiguration` and similar.
+4. Smaller "not found in Shared Preferences" rows – about 80 rows:
+   - `StoreNumberFacade`: 26
+   - `BootstrapConfigurationFacade`: 18
+   - `GoConfigurationFacade`: 16
+   - `LifecyclePhaseServiceClient`: 12
+
+## WHY IT HAPPENS
+
+1. `InitConfigProvider.kt`, `retrieveFromPrivateStorage` (about lines 118–145): when nothing is saved it logs 2 errors (the "Shared Preferences not found" line and the "External storage not mounted" line).
+2. `InitConfigProvider.kt`, `retrieveFromLocalResources` (about lines 135–139): logs "External storage not mounted..." as ERROR EVERY time it runs, even when the built-in config loaded fine.
+3. The message is WRONG. Nothing in the code checks whether storage is mounted. It really means "no saved copy, using the built-in one".
+4. `LauncherUtils.retrieveFromPrivateStorage` (Launcher, about line 469): its own comment says a cached copy exists only if an earlier attempt with this Launcher version succeeded and data was not cleared. So a new install, an update or cleared data always logs this as an error. This is the normal first run.
+5. 210 of the 484 `LauncherUtils` rows and 516 of the 1,599 rows overall have no device ID.
+
+## NOT SURE YET
+
+\- Whether any of these rows hide a real problem (for example, a saved file that should exist but is gone). The log does not tell. We only know the built-in fallback is the designed behaviour.
+
+## WHAT TO DO
+
+1. Change these "not found, using default" logs from ERROR to INFO (or DEBUG).
+2. Remove or correct the "External storage not mounted and persistent cache not found" text. Say:
+   ```
+   No saved init config found, using built-in config.
+   ```
+3. Log it once per start, not twice (the same message is logged in two places).
+4. Keep ERROR only for real failures, for example a saved file that exists but cannot be read or parsed.
+
+## DONE WHEN
+
+A normal first start produces no error rows for these cases, and real failures still show as errors.
+
+\===== TICKET 2 =====
+
+# TITLE: Support Service config file path is missing a "/" (/storage/emulated/0supportserviceconfig.json) - file can never be read or written
+
+## WHAT IS WRONG
+
+163 error rows (1–23 Oct 2026, all with no device ID):
+
+- "Unable to retrieve configuration at [/storage/emulated/0supportserviceconfig.json] ... FileNotFoundException" – 79 rows.
+- "Exception while attempting to write config to file at path [/storage/emulated/0supportserviceconfig.json]" – 84 rows.
+
+The path has no "/" between "0" and "supportserviceconfig.json". The app can neither read nor write this file.
+
+## WHY IT HAPPENS
+
+1. `SupportServiceConfigProvider.kt` (line 50) builds the path from three parts:
+   ```
+   external storage + storageProvider.configurationSubfolder + "supportserviceconfig.json"
+   ```
+2. `configurationSubfolder` comes from the device platform class:
+   - Zebra: `"/Bootstrap/Config/"`
+   - Samsung: `"/Bootstrap/Config/"`
+   - Honeywell: `Constants.HONEYWELL_CONFIG_FOLDER`
+   - Default provider: `"/Bootstrap/Config/"`
+   - GenericPlatform: `""` (EMPTY STRING)
+3. With the empty string, the path becomes:
+   ```
+   /storage/emulated/0supportserviceconfig.json
+   ```
+   That path is not valid for the app, so read and write both fail.
+4. The same empty value is used when saving the config (lines about 76 and 116) and in the other load code (line 208), so the config can never be saved on this device type.
+
+## LIKELY CAUSE
+
+The device is detected as a Generic platform (not Zebra, Samsung or Honeywell).
+
+All 163 rows have no device ID, which fits an unrecognised device or early start before the ID is known.
+
+NOT CONFIRMED: Which device or model this is.
+
+## NOT SURE YET
+
+- Which device/model is detected as Generic.
+- Why the platform is not recognised there.
+- What happens to the app after the failure (it falls back to the built-in config, but we have not checked what else depends on the saved file).
+
+## WHAT TO DO
+
+1. Build the path safely (use `File(parent, name)` instead of joining strings), so a missing "/" cannot happen.
+2. Give `GenericPlatform` a real `configurationSubfolder` (for example `"/Bootstrap/Config/"`), the same as the other platforms.
+3. Find which devices are detected as Generic and check why (add the device model to the log).
+4. Once the path is right, log a missing file as INFO, not ERROR (see Ticket 1).
+
+## DONE WHEN
+
+The config path always has the correct "/", and the config file can be read and saved on every device type.
+
+
   
