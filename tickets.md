@@ -608,3 +608,128 @@ One network problem produces one log line instead of multiple repeated error log
 - Why the affected devices lost network connectivity. The logs do not provide the reason.
 - Volley's actual timeout value in `TimeAction`. No explicit configuration was found.
 - Why the `Base URL required` error occurs.
+
+
+
+
+
+# TICKET 4: QA/Dev Devices Are Calling the Production Server and Getting 403 Forbidden
+
+## 1. What Is Happening?
+
+Some QA/Dev devices are receiving `403 Forbidden` responses from the Launcher service.
+
+The error logs contain 274 occurrences of 403 Forbidden errors.
+
+Approximately 93% of these API calls are going to the Production server instead of the QA server.
+
+### API failure breakdown
+
+| API               | 403 Error Count |
+| ----------------- | --------------- |
+| `getFile`         | 120             |
+| `getStoreDetails` | 94              |
+| `events`          | 37              |
+
+## 2. Why Is It Happening?
+
+### Root Cause 1: No QA URL for getStoreDetails
+
+The Launcher does not have a separate QA endpoint configured for `getStoreDetails`.
+
+Instead, the Production URL is hardcoded directly in the code.
+
+As a result, QA/Dev devices also send requests to the Production server.
+
+### Root Cause 2: Sample bootstrap.json Contains Production URL
+
+The sample `bootstrap.json` file also contains the Production server address.
+
+This can cause test devices to use the Production endpoint instead of QA.
+
+### Root Cause 3: Production Defaults Are Used When Bootstrap File Is Missing
+
+When the bootstrap configuration file is missing on the device, the Launcher falls back to the default Production server addresses.
+
+Consequently, QA/Dev devices may unintentionally communicate with Production.
+
+### Root Cause 4: getFile Falls Back to Production
+
+When the `getStoreDetails` request fails, the subsequent `getFile` request also falls back to the Production server.
+
+Therefore, one initial configuration or API failure can lead to additional Production API failures.
+
+### Root Cause 5: Production Server Rejects Test Devices
+
+The Production server refuses requests from these test devices, resulting in HTTP 403 Forbidden responses.
+
+## 3. What Is Not Confirmed Yet?
+
+The following points require further investigation:
+
+1\. getFile 403 errors without earlier getStoreDetails failures
+
+- 73 `getFile` 403 errors do not have a preceding `getStoreDetails` 403.
+- Most are associated with device `24198524213116`.
+- The `cadlauncherservice` team needs to investigate its server logs to identify the reason.
+
+2\. Actual bootstrap.json contents
+
+- The configuration currently present on the affected devices has not been verified.
+- We need to confirm whether those devices contain Production or QA URLs.
+
+3\. Login token environment
+
+- It is not yet confirmed whether the login token belongs to the QA or Production environment.
+- This needs to be verified as part of the investigation.
+
+## 4. What Needs to Be Done?
+
+1\. Add a QA endpoint for getStoreDetails
+
+- Introduce a separate QA URL instead of using the hardcoded Production URL.
+- Ensure the correct endpoint is selected based on the environment.
+
+2\. Fix the sample bootstrap.json
+
+- Update the sample configuration to contain the appropriate QA endpoint for test environments.
+
+3\. Prevent silent Production fallback
+
+- If the bootstrap configuration file is missing on a QA/Dev device, do not silently fall back to Production defaults.
+- Handle missing configuration explicitly.
+
+4\. Investigate device 24198524213116
+
+- Contact the `cadlauncherservice` team.
+- Request server-side logs for the 73 `getFile` 403 failures.
+- Identify why these requests are rejected without an earlier `getStoreDetails` 403.
+
+5\. Verify the login token environment
+
+- Confirm that QA/Dev devices use the correct environment-specific authentication token.
+
+## 5. Done When
+
+- QA/Dev devices never make API calls to the Production server.
+- The correct QA endpoints are used for `getStoreDetails`, `getFile`, and other applicable APIs.
+- Missing bootstrap configuration does not cause a silent fallback to Production.
+- The 403 Forbidden errors related to incorrect environment routing stop.
+
+## 6. Key Findings
+
+| Area                     | Finding                                                     |
+| ------------------------ | ----------------------------------------------------------- |
+| Total errors             | 274                                                         |
+| Production traffic       | 93% of failing calls                                        |
+| Main issue               | QA/Dev devices calling Production endpoints                 |
+| `getFile`                | 120 failures                                                |
+| `getStoreDetails`        | 94 failures                                                 |
+| `events`                 | 37 failures                                                 |
+| Configuration issue      | Production URL hardcoded in Launcher                        |
+| Bootstrap issue          | Sample `bootstrap.json` contains Production URL             |
+| Fallback issue           | Missing bootstrap configuration uses Production defaults    |
+| Additional investigation | 73 `getFile` failures without earlier `getStoreDetails` 403 |
+| Affected device          | `24198524213116`                                            |
+
+Summary: QA/Dev devices are unintentionally communicating with Production because of hardcoded Production URLs, incorrect bootstrap configuration, and Production fallback behavior. The fix is to configure environment-specific endpoints, prevent silent Production fallback, and investigate the remaining 403 failures with the backend team.
