@@ -851,3 +851,74 @@ After enabling SPIFFE authentication:
 | Affected devices  | `25156524202317`, `24198524213116`                 |
 
 Summary: GoLauncher has SPIFFE authentication disabled in the committed implementation, but the lifecycle-phase API now requires it. Enabling `useSpiffeAuth()` and releasing the updated build should resolve the 401 errors and the related `Lifecycle phase null` errors.
+
+
+# TICKET 5: SPIFFE Token Unavailable – Launcher Calls Fail Before Leaving the Device When the Login Token Cannot Be Fetched
+
+## WHAT IS WRONG
+
+The Launcher logs errors because it does not have a login (SPIFFE) token, so its requests never go out.
+
+Approximately 104 rows in the logs (September 23 to October 27):
+
+- `SPIFFE token unavailable for request ...` – 43 rows
+- `Token refresh failed, retrying in 5 min` – 61 rows
+
+Related rows:
+
+\- `SPIFFE authentication failed - cannot proceed without token` from `PlatformConfigFacade` – approximately 118 additional rows.
+
+Most affected device:
+
+- 51 of the 61 refresh failures come from one device: DSN `24198524213086`.
+- This is the same device that cannot reach `identity.service.homedepot.com` (see the network ticket about identity service / timeouts).
+
+## WHY IT HAPPENS
+
+1\. The token comes from the Support Service app. It requests a token from `identity.service.homedepot.com` and shares it with Launcher through a Content Provider (`SpiffeIdProvider`).
+
+2\. If the device cannot reach the identity service due to network issues, DNS failures, or timeouts, the token request fails.
+
+3\. The Launcher's `SpiffeAuthInterceptor.kt` (lines 21–26) has no token, so it logs an error and throws an exception. The actual API request is never sent.
+
+4\. `SpiffeTokenUseCaseImpl.waitForEnvironment()` waits up to 12 × 5 seconds (approximately 60 seconds) for the environment configuration before giving up.
+
+5\. `SpiffeTokenRefreshManager` (Support Service) retries only every 5 minutes after a failure. As a result, the device remains without a token for a long time, and every request in between fails again.
+
+6\. Each failed request is logged as an error, so one network problem creates many error rows.
+
+## SO WHAT IS THE ROOT CAUSE?
+
+It is a side effect of the network problem affecting the identity service, not necessarily a separate SPIFFE authentication bug.
+
+Fixing the network connectivity issue should remove most of these rows.
+
+The code only makes the issue more visible: one network outage generates many repeated error logs.
+
+## NOT SURE YET
+
+- Why device `24198524213086` cannot reach the identity service. Is it device Wi-Fi, store network, or firewall? The `192.168.x.x` network issue is the likely suspect.
+- Whether the token was missing because the Support Service app was not running or the Content Provider was not ready on the other devices.
+
+## WHAT TO DO
+
+1\. Fix network access to `identity.service.homedepot.com` for device `24198524213086`. Check Wi-Fi, DNS, and firewall restrictions.
+
+2\. Log `token unavailable` once per outage, not once per request.
+
+3\. Retry token refresh sooner initially, using progressive retry intervals:
+
+- First retry: 30 seconds.
+- Second retry: 1 minute.
+- Third retry: 2 minutes.
+- Subsequent retries: 5 minutes.
+
+4\. Make the Launcher queue or skip non-critical calls (such as metrics/events) while no token is available.
+
+## DONE WHEN
+
+- A single token outage creates one error log, not dozens.
+- The device gets a SPIFFE token again soon after network connectivity returns.
+- Launcher requests resume once the token becomes available.
+
+  
