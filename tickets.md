@@ -733,3 +733,121 @@ The following points require further investigation:
 | Affected device          | `24198524213116`                                            |
 
 Summary: QA/Dev devices are unintentionally communicating with Production because of hardcoded Production URLs, incorrect bootstrap configuration, and Production fallback behavior. The fix is to configure environment-specific endpoints, prevent silent Production fallback, and investigate the remaining 403 failures with the backend team.
+
+
+
+
+# TICKET 3: GoLauncher Lifecycle-Phase API Returns 401 Because SPIFFE Authentication Is Disabled
+
+## 1. What Is Happening?
+
+GoLauncher is receiving HTTP 401 Unauthorized errors when calling the lifecycle-phase API.
+
+The issue occurs because SPIFFE authentication is disabled for GoLauncher, while the platform configuration endpoint now requires a SPIFFE authentication token.
+
+## 2. Evidence From the Error Logs
+
+- Total rows: 811
+- Percentage of Auth errors: 61%
+- Affected devices:
+  - `25156524202317`
+  - `24198524213116`
+- Most affected dates: October 6 and October 9.
+
+These errors indicate that GoLauncher is making requests without the required SPIFFE authentication token.
+
+## 3. Root Cause
+
+The issue is related to the following method:
+
+```
+AirWatchApiService.useSpiffeAuth()
+```
+
+In the committed code, this method returns:
+
+```
+override fun useSpiffeAuth(): Boolean {
+    return false
+}
+```
+
+This change was introduced in:
+
+- Commit: `c960cff`
+- Released tags:
+  - `7.0.001`
+  - `7.0.002`
+  - `7.0.003`
+  - `7.0.004`
+
+Previously, SPIFFE authentication was disabled for GoLauncher.
+
+However, the `platformConfiguration` endpoint now requires a SPIFFE token.
+
+As a result:
+
+1. GoLauncher makes the lifecycle-phase API request.
+2. SPIFFE authentication is disabled.
+3. The request is sent without the required authentication token.
+4. The backend returns HTTP 401 Unauthorized.
+5. The lifecycle-phase retrieval fails.
+6. GoLauncher subsequently logs `Lifecycle phase null`.
+
+## 4. Current Implementation Status
+
+An uncommitted code change already updates the authentication configuration to enable SPIFFE authentication.
+
+The current change sets:
+
+```
+override fun useSpiffeAuth(): Boolean {
+    return true
+}
+```
+
+However, the comment above this method still says:
+
+```
+// Do NOT use SPIFFE
+```
+
+This comment is outdated and does not reflect the current implementation.
+
+## 5. What Needs to Be Done?
+
+1. Keep `useSpiffeAuth()` returning `true`.
+2. Update the outdated comment to indicate that SPIFFE authentication is required.
+3. Verify that the lifecycle-phase API request includes the SPIFFE authentication token.
+4. Test the change on a device.
+5. Verify that the backend returns a successful response instead of HTTP 401.
+6. Release the updated GoLauncher build.
+
+## 6. Expected Result
+
+After enabling SPIFFE authentication:
+
+- GoLauncher should attach the SPIFFE token to the lifecycle-phase API request.
+- The backend should accept the authenticated request.
+- The lifecycle-phase API should return the expected response.
+- The `Lifecycle phase null` errors should stop.
+
+## 7. Done When
+
+- No new HTTP 401 errors occur for the GoLauncher lifecycle-phase API.
+- No new `Lifecycle phase null` errors occur.
+- The updated implementation is tested and released.
+
+## 8. Key Files / References
+
+| Item              | Details                                            |
+| ----------------- | -------------------------------------------------- |
+| Class / Interface | `AirWatchApiService`                               |
+| Method            | `useSpiffeAuth()`                                  |
+| Required value    | `true`                                             |
+| Commit            | `c960cff`                                          |
+| Affected releases | `7.0.001` – `7.0.004`                              |
+| API               | `platformConfiguration` / lifecycle-phase endpoint |
+| Affected devices  | `25156524202317`, `24198524213116`                 |
+
+Summary: GoLauncher has SPIFFE authentication disabled in the committed implementation, but the lifecycle-phase API now requires it. Enabling `useSpiffeAuth()` and releasing the updated build should resolve the 401 errors and the related `Lifecycle phase null` errors.
