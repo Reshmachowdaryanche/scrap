@@ -1024,6 +1024,66 @@ About 1,350 of the 1,599 Config/File error rows (24 Sep to 30 Oct 2026) are this
 
 \- Whether any of these rows hide a real problem (for example, a saved file that should exist but is gone). The log does not tell. We only know the built-in fallback is the designed behaviour.
 
+
+
+## TICKET 5
+
+TITLE: Support Service config load fails (no login token, crash in error handling), holds the config lock too long, and then init does nothing (about 72 rows)
+
+### WHAT IS WRONG
+
+About 72 error rows (24 Sep to 20 Oct 2026) are one chain of failures in the Support Service:
+
+1. "null loadConfig failed to pull supportServiceConfig.json from PCF java.lang.NullPointerException at ...getLifeCyclePhaseFromIsp" - 32 rows
+2. "Error acquiring lock to retrieve configuration." - 19 rows
+3. "No service configuration available. Not executing any actions." - 18 rows (plus 3 rows "No such service ... DisableGOLauncherJob" in the same init)
+
+Devices:
+
+- `25147524201042` (12 NPE rows)
+- `25156524203544` (8)
+- `25160524206657` (6)
+- `25156524202317` (3)
+- Others (3)
+
+Busiest days: 10 Oct (8), 13 Oct (8), 28 Sep (4), 20 Oct (4).
+
+The three kinds of rows come from the same devices on the same days.
+
+### WHY IT HAPPENS (verified in the code and in the log)
+
+1. `SupportServiceConfigProvider.getLifeCyclePhaseFromIsp` (line 341) calls the PRODUCTION URL `.../v1/stores/{store}/platformConfiguration` (`UrlConstants PLATFORM_CONFIG_URL_PROD`). It calls `executeWebCall(url, "GET", false)`, so `requiresSpiffeAuth` is false and NO login token is sent.
+2. The server refuses it. The log shows "HTTP response of 401 from `https://cadlauncherservice.storeapps.homedepot.ca/v1/stores/9771/platformConfiguration`". Connection failures (45 second timeout) also appear. `executeWebCall` returns null.
+3. Line 347: `rootObject!!.getJSONObject(...)` throws a NullPointerException (no message). The catch block (line 350) does `LogProcessor.e(TAG, (e.message)!!)`. The message is null, so this throws a SECOND NullPointerException. `loadConfig`'s outer handler then logs "null loadConfig failed ..." - the "null" at the start is the missing message. This matches the 32 rows.
+4. `SupportServiceApplication.reloadConfiguration` (lines about 168-215) takes the config semaphore and only releases it after `loadConfig` finishes. `loadConfig` makes up to two web calls (platformConfiguration and the PCF config), each with a 45 second timeout (`SupportServiceConfigProvider.executeWebCall`).
+5. `SupportServiceApplication.getConfiguration` (line 275) waits only 5 seconds for that semaphore. When it times out, it logs "Error acquiring lock to retrieve configuration." and returns null (19 rows).
+6. `SilentFullInitActivity` (line 390) then logs "No service configuration available. Not executing any actions." (18 rows). Init skips its work (app whitelist, file permissions, time and other start-up tasks).
+
+### RELATED FINDINGS
+
+- It is the same missing-token 401 as the GoLauncher lifecycle call (Auth A ticket), now in the Support Service.
+- It always uses the production host, even on QA devices (see the 403 ticket).
+- It may explain why init seems to repeat many times a minute on device `24198524213086` (Device/App ticket 1). This link is NOT proven.
+
+### NOT SURE YET
+
+- The size of the effect: how many times init really skipped its work. The log only shows 18 "No service configuration" rows.
+- Whether the platformConfiguration endpoint needs the token only on production. The 401 rows are from the production host.
+- Why the SD-card or built-in config is not used as soon as the web call fails (the code does fall back, but the lock is already held for a long time).
+
+### WHAT TO DO
+
+1. Send the SPIFFE token on the platformConfiguration call in `getLifeCyclePhaseFromIsp` (`requiresSpiffeAuth = true`).
+2. Use the QA host for QA stores, not always `PLATFORM_CONFIG_URL_PROD`.
+3. Remove `!!` in `getLifeCyclePhaseFromIsp` (line 347) and in the catch (line 350). If the call fails, keep the default lifecycle ("PR" today) and log one clear line with the HTTP code.
+4. Do not hold the config lock while waiting for the network. Load the local (SD card or built-in) config first and set it, then update from the cloud in the background.
+5. Make `getConfiguration` wait longer or return the last known config instead of null.
+6. Log "No service configuration available" once, as a warning, with the reason.
+
+### DONE WHEN
+
+The config load works with a token, a failed web call never crashes, init always has a config, and these rows stop.
+
 ## WHAT TO DO
 
 1. Change these "not found, using default" logs from ERROR to INFO (or DEBUG).
@@ -1366,6 +1426,9 @@ Same root as the Network ticket about metrics failing to reach the production Wa
 ### DONE WHEN
 
 Switched-off metrics write no ERROR rows, and no user IDs or serial numbers are in the error log.
+
+
+
 
 
 
