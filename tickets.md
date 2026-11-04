@@ -1095,5 +1095,89 @@ NOT CONFIRMED: Which device or model this is.
 
 The config path always has the correct "/", and the config file can be read and saved on every device type.
 
+## TICKET 1
+
+Title: Support Service cannot read the time zone from the time server (193 errors)
+
+What is wrong
+
+- 193 error rows (24 Sep to 27 Oct 2026), all the same: `Exception parsing timeFromISP object: For input string: ""-4""`
+- The app asks the time server for the store's time zone, cannot read the answer, and does not use it.
+- Main devices: `25147524201072` (53), `24198524213086` (43), `25160524206657` (42), no device ID (49).
+
+Why it happens
+
+1. The time server sends `GMTOffset` as text: `"-4"`.
+2. `TimeAction.kt` line 218 expects a number and uses `Integer.parseInt(...toString())`. For text, the quote marks stay, so it fails.
+3. The launcher already knows it is text (`TimeIspResponse.kt` uses a String). The Support Service code does not.
+4. Second problem: the lookup table (`olsonTimezoneFromOffset`) only knows positive minutes, such as 300 (New York) or 360 (Chicago). The value `-4` looks like hours. So fixing the first problem may not be enough. This is my guess. We haven't seen the real server answer.
+5. The function always returns false, and the error is logged twice.
+6. Device time is probably still set by the NTP backup and the saved time zone. Not checked.
+
+Not sure yet
+
+- The real server answer: is `GMTOffset` in hours or minutes, and is there a proper zone name?
+- Whether device time zones are wrong because of this.
+
+What to do
+
+1. Call the time server once for a QA store and look at the real answer.
+2. Read `GMTOffset` whether it is text or a number. Convert hours to minutes if needed.
+3. Return the real result (true or false) and log one error, not two.
+
+Done when: the time zone is read correctly and these 193 errors stop.
+
+## TICKET 2
+
+Title: GoLauncher cannot decrypt its built-in Airwatch credentials on one device, and the log hides the real reason (26 errors)
+
+What is wrong
+
+- 26 error rows on one device, `25160524206657` (25 Sep: 4 rows, 28 Sep: 22 rows).
+- "Exception while decrypting airwatch QA credentials … Concatenated string is null. Unable to parse." (13 rows)
+- The same message for PR credentials (13 rows).
+- QA and PR fail together every time.
+
+What the code does
+
+1. `ConfigurationManager.applyCredentialConfig` (lines \~406-458) picks the encrypted credential text from the build: `BuildConfig.CREDENTIALS_<buildType>_QA` / `_PR`.
+   - Build types 111, 131, 141 and 151 come from `bootstrap.json`. Any other build type uses `CREDENTIALS_QA` / `CREDENTIALS_PR`.
+   - The values are filled at build time from `secrets.properties` (`GoLauncher/build.gradle` lines 37-50).
+2. It calls `CryptoHelper.decrypt`: Base64 decode, then Blowfish decrypt.
+3. `decryptBlowfish` (lines 62-73) catches every error, prints it and returns null. Then `new Credentials(null)` throws "Concatenated string is null" (`Credentials.java` line 26). That is the only message we see. The real error is lost.
+4. After a failure the cached credentials are set to null. `getAirwatchCredentials()` then returns null. I didn't trace every place that uses it.
+
+What the message tells us
+
+- Empty credential text would log a different message ("Configured AW credentials are null!"), so the build had non-empty text.
+- Bad Base64 would throw Guava's own error, not this one.
+- So Base64 worked and Blowfish failed. The text isn't valid data for this app's key. Both QA and PR fail in the same run, so the cause is common to both. This is my reading of the code.
+
+Why this device only (not confirmed)
+
+- The log has no app version, so we don't know which build it ran.
+- My local `secrets.properties` has empty placeholders, so I couldn't check the real values.
+- The same device also has other setup errors (old `st%STORE%` server address, missing bootstrap file). It may run an old or wrongly built app.
+
+Other things found (not in the 26 rows)
+
+- `ConfigurationManager.java` line 361: `_cachedBuildType` is an `int` set from `bootstrapConfig == null ? null : getBuildType()`. A missing bootstrap config or build type can cause a NullPointerException.
+- The encryption key is written in the source code and the cipher uses plain "Blowfish" mode. This is a security weakness, unrelated to these rows.
+
+What to do
+
+1. In `CryptoHelper.decryptBlowfish`, don't return null. Throw or log the real exception.
+2. Log which build type and which credential (QA or PR) failed, never the values. Log once, not twice.
+3. Find the app build on device `25160524206657`, check which `CREDENTIALS_*` value it was built with, and rebuild if it's wrong.
+4. Fix the null/int problem at line 361.
+5. Later: move the key out of the source code and use a safer cipher mode.
+
+Done when: a decrypt failure shows its real reason and build type, and device `25160524206657` gets working credentials.
+
+
+
+
+
+
 
   
