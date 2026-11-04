@@ -1176,6 +1176,201 @@ Done when: a decrypt failure shows its real reason and build type, and device `2
 
 
 
+## TICKET 1
+
+TITLE: Support Service logs "Unable to resolve package signature" for printerservice and fp_filemanager, and init seems to repeat many times per minute on one device (131 rows, only 20 bursts)
+
+WHAT IS WRONG
+
+131 error rows (28 Sep to 23 Oct 2026):
+
+- "Unable to resolve package signature for com.homedepot.sa.xp.printerservice" - 65 rows
+- "... com.homedepot.sa.xp.fp_filemanager" - 62 rows
+- "... com.homedepot.sa.xp.firstphone" - 2 rows
+
+The 131 rows are only 20 bursts. 19 of the 20 bursts contain both packages together.
+
+Device `24198524213086` has 86 of the rows. Its biggest burst: 34 rows in ONE minute (14 Oct, 17:40). That is about 17 runs of the same loop in one minute.
+
+WHY IT HAPPENS (from the code)
+
+1. At init the Support Service loops over `config.manageFilePermissionWhiteList` and calls `scopedFilePermissionEnable` for each package (`SilentFullInitActivity.kt` line 367, `SilentInitReceiver.kt` line 160; also `PackageInstallReceiver.kt` lines 64 and 75).
+2. `ZebraPlatform.kt` lines 485-489: it asks for the app's signature (`FirstPhoneUtils.getCallerSignatureBase64Encoded`). If that returns null it logs an error and returns.
+3. The signature call returns null when the app cannot be found or its signature cannot be read. The log cannot tell these two cases apart.
+4. The built-in config (`defaultsupportserviceconfig.json`) has an EMPTY `manageFilePermissionWhiteList`. So these two packages come from another config the device loaded (cloud or SD card).
+
+NOT SURE YET
+
+- Most likely these apps are simply not installed on those devices, but this is only a guess. Nothing else in the log mentions these two packages.
+- Why init runs about 17 times a minute on device `24198524213086` (restart loop? repeated trigger?). Not checked.
+- Which config (cloud or SD card) holds the two packages.
+
+WHAT TO DO
+
+1. If the package is not installed, skip it and log at INFO. Log the reason (not installed vs signature unreadable) when it is an error.
+2. Find out why init repeats on device `24198524213086` on 14-15 Oct (see the other logs from that time).
+3. Check the config source: should printerservice and fp_filemanager be in `manageFilePermissionWhiteList` for these devices?
+4. Log once per init, not once per loop pass.
+
+DONE WHEN
+
+A package that is not installed does not create an error, and init does not repeat many times a minute.
+
+## TICKET 2
+
+TITLE: Support Service removes apps as "untrusted" that may be legitimate - app whitelist on devices differs from the built-in whitelist (84 rows)
+
+### WHAT IS WRONG
+
+84 rows (24 Sep to 27 Oct 2026): "Untrusted package installed - `<package>` - Removing..." The app is then uninstalled.
+
+Packages removed most often:
+
+- `com.homedepot.sa.xp.homedepotbrowser` - 22
+- `com.paloaltonetworks.globalprotect` (VPN) - 10
+- `com.zebra.wfc.central` - 8
+- `com.homedepot.sa.xp.hdbluetoothmanager` - 8
+- `ca.homedepot.mytoolbelt` - 4
+- `com.google.android.apps.work.clouddpc` (Android device policy app) - 3
+- Others: Google apps (Maps, YouTube, Gmail, Photos, Calendar, Dialer ...) and some Zebra/Symbol apps.
+
+It happens on all 8 devices (27 rows have no device ID). Peak: 23 Oct (23 rows).
+
+### WHAT THE CODE DOES (verified)
+
+\- `PackageInstallReceiver.kt` lines 49-55: if `isAppInstallWhiteListEnabled` is true and the package is not in `appInstallWhiteList`, it logs an error and uninstalls the app. This is a security feature. The error line is a record that it worked.
+
+### WHAT WE VERIFIED
+
+1. `homedepotbrowser` and `hdbluetoothmanager` ARE on the built-in whitelist (`defaultsupportserviceconfig.json`, since the first commit on 17 Feb 2026), but were removed 30 times. So these devices were NOT using the built-in whitelist. The code loads config from cloud first, then the SD card, then the built-in file. We have not seen which one the devices used.
+2. `ca.homedepot.mytoolbelt`: commit `cd64c58` (11 Aug 2026, #27) renamed `ca.homedepot` to `com.homedepot` in the whitelist. A device still installed the OLD package name, so it is removed. This one is explained by the rename.
+3. `globalprotect`, `clouddpc`, `zebra.wfc.central`, `printerservice`, `fp_filemanager` were never on the built-in whitelist (not in its git history).
+4. The 27 rows with no device ID include many standard Google apps (Maps, YouTube, Gmail ...). This looks like a newly set-up or reset device, where Android installs its default apps before the whitelist is ready. This is my inference, not confirmed.
+5. Several removals have the same millisecond (for example 28 Sep 16:58:13: GlobalProtect and the browser). Several installs were handled together.
+
+### NOT SURE YET
+
+- Which whitelist the devices actually used and why it lacks `homedepotbrowser` and `hdbluetoothmanager` (stale SD-card file, cloud config, or something else).
+- Whether the removal of GlobalProtect, Zebra Workstation Connect and Google's `clouddpc` was wanted. Removing the device policy app could matter.
+
+### WHAT TO DO
+
+1. Config owner: confirm which whitelist is active on devices and why it differs from the built-in one.
+2. Decide if GlobalProtect, `com.zebra.wfc.central` and `clouddpc` should be on the whitelist; add them if yes.
+3. Find the source still installing the old `ca.homedepot.mytoolbelt` package (MDM app list) and update it to `com.homedepot.mytoolbelt`.
+4. Log at WARNING (or INFO with a clear "removed by policy") instead of ERROR, and log which whitelist was used (cloud / SD card / built-in).
+5. Check if devices in first-time setup should skip removal until the config is loaded.
+
+### DONE WHEN
+
+Only truly unapproved apps are removed, the active whitelist is known, and legitimate apps are no longer removed.
+
+
+
+
+
+
+
+## TICKET 3
+
+TITLE: Launcher logs "System is running low on memory" as an error (18 rows)
+
+### WHAT IS WRONG
+
+18 error rows from the launcher (`com.homedepot.sa.xp.firstphone`), tag `LauncherApplication`: "System is running low on memory".
+
+### WHY IT HAPPENS (from the code)
+
+`LauncherApplication.java` lines 162-165: `onLowMemory()` is called by Android when memory is low. The code logs `LogProcessor.e(...)` every time it is called. It is a system warning, not an app failure.
+
+### NOT SURE YET
+
+\- Which devices and which apps used the memory. The 18 rows were not checked per device.
+
+### WHAT TO DO
+
+1. Log at WARNING instead of ERROR.
+2. Add device model, free memory and the time since app start to the log, so real memory problems can be found.
+3. Check which devices send this message often.
+
+### DONE WHEN
+
+Low memory is a warning with useful details.
+
+
+
+## TICKET 4
+
+TITLE: "Metrics disabled" trace messages are logged as ERROR in all apps (2,485 rows), and some contain user IDs and serial numbers
+
+### WHAT IS WRONG
+
+2,485 error rows (22 Sep to 27 Oct 2026) are not errors. They are trace messages about metrics that are switched off. Every metric call writes 2 rows:
+
+1. "Sending metric: `<name>` with value: ... from: `<place>`" - 1,241 rows
+2. "Metric Point Tags: `{...}`" - 1,244 rows
+
+That is about 1,240 metric calls. Nothing is actually sent.
+
+Rows by app:
+
+- Launcher (`com.homedepot.sa.xp.firstphone`): 2,343
+- Log processor library (`SocketMonitor`): 108
+- Support tool (`com.homedepot.sa.xp.supporttool`): 22 (code not found locally; probably the same pattern)
+- GoLauncher: 12
+
+Top metric calls in the launcher:
+
+- `LauncherViewModel.startScanner` (369)
+- `LauncherViewModel.sendLaunchMetric` (359)
+- `PlatformConfigFacade.logMetrics` (292)
+- `LauncherViewModel.performPostLoginTasks` (69)
+- `UserLogoutJob.call` (36)
+
+Most rows are from devices `25147524201072` (1,079) and `24198524213086` (524).
+
+### WHY IT HAPPENS (from the code)
+
+The metrics code writes two `LogProcessor.e` (ERROR) lines, then stops before the network call:
+
+- Launcher (CAD_Launcher and CAD_Launcher02): `MetricsLoggingManager.java` lines 110-111 log the two lines at ERROR, then `if(true) return;` (about line 115). Commit `91cf367` (10 Sep 2026) added this. Its comment says the call is off "to avoid spamming the logs" because the Wavefront endpoint is not live yet. The same commit adds the two ERROR lines, so every metric still writes 2 error rows.
+- Support Service: `MetricsLoggingManager.kt` lines 72-74 (ERROR x2, then `return`), commit `7209fd3` (22 Sep 2026).
+- Log processor library: `SocketMonitor.kt` lines 203-205 (ERROR x2, then `return`), commit `04e7ccd` (22 Sep 2026).
+- GoLauncher: `GoRepository.kt` lines 509-513 (ERROR x2, then `return@let`).
+
+All rows are dated 22 Sep or later, after sending was switched off.
+
+### IDENTIFIERS IN THE LOG
+
+- 138 tag rows contain a user ID (for example `userMTB003` on login/logout metrics).
+- 54 rows contain the device serial number and store number (SocketMonitor tags).
+- GoRepository builds its tags from the device MAC and IP address (lines about 505-506). I did not check whether the 12 GoLauncher rows show them.
+
+These go into the error log that is uploaded. Someone should confirm this is allowed.
+
+### NOT SURE YET
+
+- The support tool code (not found locally).
+- Whether the metrics will be turned on again, and when.
+
+### RELATED
+
+Same root as the Network ticket about metrics failing to reach the production Wavefront host. Sending is now off, but the logging of it remains.
+
+### WHAT TO DO
+
+1. Log these two lines at DEBUG (or remove them) in all four places, and in the support tool.
+2. Do not log user IDs, serial numbers, MAC or IP in these lines.
+3. When metrics are turned on again, use the correct Wavefront host for each environment and log only real failures at ERROR.
+
+### DONE WHEN
+
+Switched-off metrics write no ERROR rows, and no user IDs or serial numbers are in the error log.
+
+
+
+
+
 
 
 
