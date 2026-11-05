@@ -1,6 +1,6 @@
 # Android Error Log Analysis – Presentation Brief
 
-Source: error-log export, 24 Sep – 27 Oct 2026. The export has 1,285,624 rows in total: 23,277 real error rows (8 devices, stores 9771 and 7132) and 1,262,347 synthetic `PaymentManager` rows (98% of the file). The synthetic rows are analysed separately in section 1A and are excluded from every other number in this brief.
+Source: error-log export, 24 Sep – 27 Oct 2026. The export has 23,277 real error rows (8 devices, stores 9771 and 7132) plus synthetic `PaymentManager` test rows. The synthetic rows are covered in section 1A and excluded from every other number in this brief.
 
 Apps involved: Support Service, Launcher, GoLauncher, Support Tool, and the Log Processor library (embedded in every app).
 
@@ -19,30 +19,14 @@ Apps involved: Support Service, Launcher, GoLauncher, Support Tool, and the Log 
 
 Takeaway: about 17% of rows (about 3,900) are normal events logged as ERROR. About 66% is one issue (old builds sending metrics to production).
 
-## 1A. Synthetic error: PaymentManager (1,262,347 rows, 98% of the export)
+## 1A. Synthetic error: PaymentManager (test data, not a real failure)
 
-- **Error:** "Failed to connect to payment service". Tag `PaymentManager`, level ERROR, on every row.
-- **Why it is called synthetic:**
-  - The code does not contain it. No file in the CAD repos mentions `PaymentManager` or `payment-service`.
-  - Almost all rows (1,262,305) were created in a 35-minute window on 23 Sep 2026, between 13:06 and 13:41. That is about 36,000 rows a minute. No real device produces that. (41 more rows are dated 22 Sep and 1 row 30 Oct.)
-  - Device IDs are fake (`ABC123DEF456`, `AAA111BBB222`, `XYZ789GHI123` and similar, 10 in total). Real DSNs are 14-digit numbers.
-  - Store numbers are 7001–7010. Real data has only stores 9771 and 7132.
-  - The 10 devices have almost the same row count (126,172–126,383 each), and the 7 error texts are spread in fixed amounts.
-  - Every row has the same message and a made-up payload (`retryCount`, `TXN-98765`-style transaction id). The real rows have no payload.
-  - Row ids are random numbers between 16,000 and 999,999, not a running sequence.
-- **What the rows contain:** 7 exception texts: Connect timed out (378,842), Read timed out (252,473), Connection refused (126,383), UnknownHost `payment-service.local` (126,198), Connection closed by peer (126,175), Connection reset (126,139), SSL handshake terminated (126,137).
-- **Application field:** spread across all 5 app names (Log Processor 505,209 across two package spellings, Launcher 252,468, Support Service 252,338, GoLauncher 126,194, Support Tool 126,138). The mix does not match real traffic, which is another sign of generated data.
-- **Root cause:** a bulk test insert into the error-log database on 23 Sep 2026 (a load or pipeline test, or a seed script). This is my reading of the data. Nobody has confirmed who ran it or why.
-- **Impact:**
-  - It makes the database about 55 times larger than the real data. Any dashboard or count without a filter shows about 98% fake errors and hides the real ones.
-  - Row counts, "top errors" and trends are wrong until it is filtered out.
-  - It also distorts the DSN, store and app breakdowns.
-- **Action:**
-  1. Ask the log platform team who inserted the rows on 23 Sep and why.
-  2. Delete them, or move them to a test table. Filter with `tag = 'PaymentManager'` and `created_on` on 2026-09-23 13:06–13:41 (plus the 42 stray rows). Take a backup first.
-  3. Block the cause: keep test data out of the production error-log table (separate environment or table, and a marker field such as `is_test`).
-  4. Until it is cleaned, exclude it in all dashboards and queries.
-- **Not confirmed:** who inserted it, whether the same pipeline could do it again, and whether `PaymentManager` is a planned feature (nothing in the repos suggests it).
+- **Error:** "Failed to connect to payment service" (tag `PaymentManager`), logged at ERROR. It makes up 98% of the export.
+- **Why it is coming:** it is test data, not app behaviour. The rows were inserted in bulk into the error-log database in one short burst on 23 Sep. They use fake device IDs and store numbers, and carry made-up payloads.
+- **Application:** none. No CAD repo contains `PaymentManager`.
+- **Root cause:** a bulk test insert into the error-log database. This is my reading of the data. Nobody has confirmed it.
+- **Impact:** any unfiltered dashboard or count is mostly fake errors and hides the real ones.
+- **Action:** find out who inserted it, delete it after a backup, keep test data out of the production error-log table, and exclude it in all queries until then.
 
 ---
 
@@ -213,7 +197,7 @@ Each card: **Error / Why / Application / Root cause / Action.**
 3. **Auth:** all backend calls from every app send the SPIFFE token. Add a check or test for this.
 4. **Logging standard:** ERROR only for real failures. Normal fallbacks and disabled features go to INFO or DEBUG. Add app version, device model and environment to every log row.
 5. **Resilience standard:** one retry policy with backoff, shorter timeouts, one log line per failure.
-6. **Test data:** clean up the 1.26 million synthetic `PaymentManager` rows and keep test data out of the production error-log table (see section 1A).
+6. **Test data:** clean up the synthetic `PaymentManager` rows and keep test data out of the production error-log table (see section 1A).
 7. **Teams to contact:** cadlauncherservice (403s on device 24198524213116, 3–9 Oct), store-info (add stores 9771 and 7132 to QA), config owner (which whitelist devices use).
 8. **Privacy and security:** review user IDs and serial numbers in the error log. Remove the hardcoded Blowfish key from source.
 
