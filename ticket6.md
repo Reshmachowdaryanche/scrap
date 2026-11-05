@@ -240,7 +240,9 @@ Each card: **Error / Why / Application / Root cause / Action.**
 
 #### O2 – Small items (four separate findings)
 
-**O2.1 – Job service missing from the manifest (real bug)**
+
+
+##**O2.1 – Job service missing from the manifest (real bug)**
 - **Error (as logged):**
   ```
   SilentFullInitActivity | No such service ComponentInfo{com.homedepot.sa.xp.firstphone.supportservice/com.homedepot.sa.xp.firstphone.supportservice.core.jobs.DisableGOLauncherJob}
@@ -257,7 +259,7 @@ Each card: **Error / Why / Application / Root cause / Action.**
 
 
 
-**O2.2 – "Permission to read serial number denied" can be wrong**
+##**O2.2 – "Permission to read serial number denied" can be wrong**
 - **Error (as logged):**
   ```
   RetrieveOemInfo | ERROR: Permission to read serial number denied.
@@ -274,7 +276,7 @@ Each card: **Error / Why / Application / Root cause / Action.**
 
 
 
-**O2.3 – Normal events logged as ERROR**
+##**O2.3 – Normal events logged as ERROR**
 - **Error (as logged):**
   ```
   GoConfigurationFacade | Loaded GoConfiguration from local resources.
@@ -291,7 +293,7 @@ Each card: **Error / Why / Application / Root cause / Action.**
 
 
 
-**O2.4 – "Encryption key cannot be null or empty" (caller now traced)**
+##**O2.4 – "Encryption key cannot be null or empty" (caller now traced)**
 - **Error (as logged):**
   ```
   ActionHandlerReceiver | Error: Encryption key cannot be null or empty
