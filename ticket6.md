@@ -243,6 +243,8 @@ Each card: **Error / Why / Application / Root cause / Action.**
   4. Extra bug: `getConfiguration()` releases the lock even when it never acquired it, so the lock stops protecting the configuration.
 - **Action:** send the SPIFFE token and use the QA server for QA stores, fix the NullPointerException in the error handling, load the local configuration (SD card or built-in) first instead of waiting for the network, and release the lock only when it was acquired.
 
+  ---
+
 #### O2 – Small items (four separate findings)
 
 
