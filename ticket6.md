@@ -238,27 +238,92 @@ Each card: **Error / Why / Application / Root cause / Action.**
 - **Root cause:** (a) the call is made without the SPIFFE token and always to the production host. (b) `!!` operators throw NullPointerExceptions in the error path. (c) the lock is held through two slow web calls, but `getConfiguration` waits only 5 seconds.
 - **Action:** send the token, use the QA host for QA stores, remove the `!!`, load the local config first and update from the cloud in the background, and return the last known config instead of null.
 
-#### O2 – Small items
-- **Missing job service (real bug):**
+#### O2 – Small items (four separate findings)
+
+**O2.1 – Job service missing from the manifest (real bug)**
+- **Error (as logged):**
   ```
   SilentFullInitActivity | No such service ComponentInfo{com.homedepot.sa.xp.firstphone.supportservice/com.homedepot.sa.xp.firstphone.supportservice.core.jobs.DisableGOLauncherJob}
   ```
-  `DisableGOLauncherJob` is scheduled but not declared in AndroidManifest.xml. Its 60 second period is also below Android's 15 minute minimum.
-- **Misleading message:**
+- **Why:** Android cannot start the job because the app never declared it.
+- **Application:** Support Service.
+- **Root cause:**
+  1. At init, `SilentFullInitActivity` (line ~239) schedules `DisableGOLauncherJob` with `JobScheduler`.
+  2. The class exists, but `AndroidManifest.xml` has no `<service>` entry for it (the manifest declares other services, but not this one). Android rejects the schedule and the catch block logs the "No such service" message.
+  3. The job's purpose is to disable the old GoLauncher app when the Launcher is installed (`SupportFacade.setDisabledApplications`). Because it never runs, that disable step never happens on these builds.
+  4. Second defect: the period is 60 seconds (`setPeriodic(60 * 1000)`). Android's minimum is 15 minutes, so even when declared the job would not run every minute.
+- **Action:** declare the job in the manifest with `android:permission="android.permission.BIND_JOB_SERVICE"`, set the period to 15 minutes or more, and confirm that GoLauncher is disabled on a device with both apps.
+- **Not confirmed:** only this branch's manifest was checked, not every build flavour.
+
+
+
+**O2.2 – "Permission to read serial number denied" can be wrong**
+- **Error (as logged):**
   ```
   RetrieveOemInfo | ERROR: Permission to read serial number denied.
   ```
-  It is logged whenever the result is empty, so it can be wrong.
-- **Normal events logged as ERROR:**
+- **Why:** the app could not read the device serial from the Zebra OEM provider, but the message guesses the reason.
+- **Application:** Support Service (Zebra platform).
+- **Root cause:**
+  1. `ZebraPlatform` reads the serial and Wi-Fi MAC from the Zebra provider `content://oem_info/oem.zebra.secure/build_serial` through `RetrieveOemInfo.getSerial()`.
+  2. `getSerial()` logs "Permission denied" whenever the cursor is null or has no rows (`cursor == null || cursor.count < 1`). A missing permission, a missing provider and an empty answer all look the same in the log.
+  3. The caller only saves the serial and MAC (into `DeviceInfoProvider`) when the result is not null, so on failure the other apps do not get them from this path.
+  4. Small leak: when the cursor has no rows it returns without closing the cursor.
+- **Action:** log "no data returned", "provider not found" and "permission denied" as separate messages, close the cursor, and log the device model. Check on an affected Zebra device whether the app has access to the OEM provider.
+- **Not confirmed:** the real reason on the affected devices. A missing Zebra access grant is the likely cause, but it is not proven.
+
+
+
+**O2.3 – Normal events logged as ERROR**
+- **Error (as logged):**
   ```
   GoConfigurationFacade | Loaded GoConfiguration from local resources.
   DeviceInfoFacade | Unable to determine store number from network and no cached value found. Device is considered out of store.
   InterceptorNetwork | WiFi has invalid IP address: 0.0.0.0. BSSID: 00:00:00:00:00:00, Signal: -127 dBm - IP: 0.0.0.0, BSSID: 00:00:00:00:00:00, Signal: -127 dBm
   ```
-- **Caller not traced:**
+- **Why:** each message describes a normal state, not a failure.
+- **Application:** GoLauncher (first message) and Launcher (other two).
+- **Root cause:** wrong log level.
+  - "Loaded … from local resources" is the designed fallback to the built-in config (same pattern as C1).
+  - "Out of store" means the device is not on a store network, which is expected away from the store.
+  - "Invalid IP 0.0.0.0" means Wi-Fi is connected but has no address yet. This is a short transitional state, and it is also sent as an analytics event.
+- **Action:** log the first two at INFO and the third at WARNING. Keep ERROR for real failures.
+
+
+
+**O2.4 – "Encryption key cannot be null or empty" (caller now traced)**
+- **Error (as logged):**
   ```
   ActionHandlerReceiver | Error: Encryption key cannot be null or empty
   ```
+- **Why:** an Airwatch request to the Support Service failed because the app's encryption key was empty.
+- **Application:** Support Service (`AirwatchAction`, run through `ActionHandlerReceiver`).
+- **Root cause:**
+  1. Until commit bc425c5 (29 Sep 2026, "MTB-6778: AW env creds cleanup"), `AirwatchAction` built its decryptor with `CryptoHelper(GuavaBase64(), BuildConfig.CRYPTO_KEY)`.
+  2. The build field `CRYPTO_KEY` is filled from `secrets.properties`, and it defaults to an empty string when the property is missing.
+  3. `CryptoHelper` refuses an empty key and throws. `ActionHandlerReceiver` catches every exception from an action and logs only `"Error: " + message`, so the log does not say which action or which key.
+  4. The commit removed this code, so current builds no longer have the problem. The rows are from 1 and 5 Oct, so they come from devices still on an older build (before ARTIFACTORY-7.0.8). This fits the old-builds theme in section 2.
+- **Action:** confirm the devices were on a build older than 7.0.8, update them, and make sure no build is made without the secrets file. In `ActionHandlerReceiver`, log the action name with the error.
+- **Not confirmed:** that those builds were made with an empty key (it is the only way this error can occur in that code).
+
+---
+
+## 4. Synthetic error: PaymentManager (test data, not a real failure)
+
+
+
+- **Error (as logged):**
+  ```
+  PaymentManager | Failed to connect to payment service
+  (error field: java.net.SocketTimeoutException: Connect timed out, and six similar exceptions)
+  ```
+- **Why it is coming:** it is test data, not app behaviour. The rows were inserted in bulk into the error-log database in one short burst on 23 Sep, with fake device IDs, fake store numbers and made-up payloads.
+- **Application:** none. No CAD repo contains `PaymentManager`.
+- **Root cause:** a bulk test insert into the error-log database. This is my reading of the data. Nobody has confirmed it.
+- **Impact:** any unfiltered dashboard or count is mostly fake errors and hides the real ones.
+- **Action:** find out who inserted it, delete it after a backup, keep test data out of the production error-log table, and exclude it in all queries until then.
+
+
 
 ---
 
