@@ -229,14 +229,26 @@ Each card: **Error / Why / Application / Root cause / Action.**
 #### O1 – Config load fails, lock held too long, init does nothing
 - **Error (as logged):**
   ```
+  SupportServiceConfigProvider | Unexpected error while making HTTP call. Message: HTTP response of 401 from https://cadlauncherservice.storeapps.homedepot.ca/v1/stores/9771/platformConfiguration java.lang.Exception: HTTP response of 401 ... at ...SupportServiceConfigProvider.executeWebCall(...) ...
   SupportServiceConfigProvider | null loadConfig failed to pull supportServiceConfig.json from PCF java.lang.NullPointerException at ...SupportServiceConfigProvider.getLifeCyclePhaseFromIsp(SupportServiceConfigProvider.kt:350) at ...loadConfig...(SupportServiceConfigProvider.kt:63) ...
   SupportServiceApplication | Error acquiring lock to retrieve configuration.
   SilentFullInitActivity | No service configuration available. Not executing any actions.
   ```
-- **Why:** one chain. The platform config call fails, the code crashes in its own error handling, the config lock stays held, and init finds no config and skips its work.
+- **Why:** one chain of problems. The app asks the server for its settings, the request fails, the error handling crashes, and start-up then asks for the settings at the wrong moment, gets nothing, and skips its work.
 - **Application:** Support Service.
-- **Root cause:** (a) the call is made without the SPIFFE token and always to the production host. (b) `!!` operators throw NullPointerExceptions in the error path. (c) the lock is held through two slow web calls, but `getConfiguration` waits only 5 seconds.
-- **Action:** send the token, use the QA host for QA stores, remove the `!!`, load the local config first and update from the cloud in the background, and return the last known config instead of null.
+- **Root cause (in simple steps):**
+  1. **The request is wrong.** The app asks the server for the store's settings without its login token (SPIFFE), and always asks the production server, even on QA devices. The server answers "401 not allowed", or the connection times out after 45 seconds.
+  2. **The error handling crashes.** The code assumes the server always answers. When it gets nothing, it crashes. Then the code that logs the error crashes too, because it expects an error message and there is none. That is why the log line starts with "null". The real reason (the 401) is hidden.
+  3. **The settings are locked while loading.** While the app loads its settings, it locks them. Any other part that asks for the settings waits only 5 seconds. A slow or unreachable server can keep the lock for up to 45 seconds. The waiting part gives up, logs "Error acquiring lock" and gets nothing.
+  4. **Start-up skips its work.** With nothing returned, start-up logs "No service configuration available" and does not run its tasks (app whitelist, file permissions, time and others).
+  5. **The lock code has its own bug.** After giving up, the waiting part still "unlocks", even though it never held the lock. Repeated timeouts then let several parts in at once, so the lock no longer protects the settings.
+  - **Good to know:** the settings do load afterwards from the SD card or the built-in file. Start-up skipped its work only because it asked while the lock was held. A 401 answers quickly, so the long wait comes from timeouts, not from the 401.
+- **Action:**
+  1. Send the SPIFFE token on the platformConfiguration call and use the QA host for QA stores.
+  2. Remove both `!!` operators. If the call fails, keep the default lifecycle and log one clear line with the HTTP code.
+  3. Do not hold the lock during network calls. Load the local config first and use it right away, then refresh from the cloud in the background.
+  4. In `getConfiguration`, release only when the lock was acquired. Wait longer, or return the last known config instead of null.
+  5. Log "No service configuration available" once, as a warning, with the reason.
 
 #### O2 – Small items (four separate findings)
 
