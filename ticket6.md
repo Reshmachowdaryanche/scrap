@@ -234,21 +234,14 @@ Each card: **Error / Why / Application / Root cause / Action.**
   SupportServiceApplication | Error acquiring lock to retrieve configuration.
   SilentFullInitActivity | No service configuration available. Not executing any actions.
   ```
-- **Why:** one chain of problems. The app asks the server for its settings, the request fails, the error handling crashes, and start-up then asks for the settings at the wrong moment, gets nothing, and skips its work.
+- **Why:** the Support Service cannot load its configuration file (`supportServiceConfig.json`) from the cloud (PCF), and start-up then skips its tasks.
 - **Application:** Support Service.
-- **Root cause (in simple steps):**
-  1. **The request is wrong.** The app asks the server for the store's settings without its login token (SPIFFE), and always asks the production server, even on QA devices. The server answers "401 not allowed", or the connection times out after 45 seconds.
-  2. **The error handling crashes.** The code assumes the server always answers. When it gets nothing, it crashes. Then the code that logs the error crashes too, because it expects an error message and there is none. That is why the log line starts with "null". The real reason (the 401) is hidden.
-  3. **The settings are locked while loading.** While the app loads its settings, it locks them. Any other part that asks for the settings waits only 5 seconds. A slow or unreachable server can keep the lock for up to 45 seconds. The waiting part gives up, logs "Error acquiring lock" and gets nothing.
-  4. **Start-up skips its work.** With nothing returned, start-up logs "No service configuration available" and does not run its tasks (app whitelist, file permissions, time and others).
-  5. **The lock code has its own bug.** After giving up, the waiting part still "unlocks", even though it never held the lock. Repeated timeouts then let several parts in at once, so the lock no longer protects the settings.
-  - **Good to know:** the settings do load afterwards from the SD card or the built-in file. Start-up skipped its work only because it asked while the lock was held. A 401 answers quickly, so the long wait comes from timeouts, not from the 401.
-- **Action:**
-  1. Send the SPIFFE token on the platformConfiguration call and use the QA host for QA stores.
-  2. Remove both `!!` operators. If the call fails, keep the default lifecycle and log one clear line with the HTTP code.
-  3. Do not hold the lock during network calls. Load the local config first and use it right away, then refresh from the cloud in the background.
-  4. In `getConfiguration`, release only when the lock was acquired. Wait longer, or return the last known config instead of null.
-  5. Log "No service configuration available" once, as a warning, with the reason.
+- **Root cause:**
+  1. To load the configuration, the Support Service first calls the platformConfiguration API to get the store's lifecycle phase (QA or production). It calls the production server without the SPIFFE token, so it gets HTTP 401 or a timeout.
+  2. The error handling then crashes with a NullPointerException, which hides the real reason. That is why the log line starts with "null".
+  3. While the configuration loads, it is protected by a lock for up to 45 seconds (the network timeout). `getConfiguration()` waits only 5 seconds for that lock, gives up and returns null. Start-up then has no configuration and skips its tasks.
+  4. Extra bug: `getConfiguration()` releases the lock even when it never acquired it, so the lock stops protecting the configuration.
+- **Action:** send the SPIFFE token and use the QA server for QA stores, fix the NullPointerException in the error handling, load the local configuration (SD card or built-in) first instead of waiting for the network, and release the lock only when it was acquired.
 
 #### O2 – Small items (four separate findings)
 
