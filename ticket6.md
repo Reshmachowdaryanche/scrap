@@ -327,22 +327,6 @@ Each card: **Error / Why / Application / Root cause / Action.**
 - **Action:** find out who inserted it, delete it after a backup, keep test data out of the production error-log table, and exclude it in all queries until then.
 
 
-
----
-
-## 4. Synthetic error: PaymentManager (test data, not a real failure)
-
-- **Error (as logged):**
-  ```
-  PaymentManager | Failed to connect to payment service
-  (error field: java.net.SocketTimeoutException: Connect timed out, and six similar exceptions)
-  ```
-- **Why it is coming:** it is test data, not app behaviour. The rows were inserted in bulk into the error-log database in one short burst on 23 Sep, with fake device IDs, fake store numbers and made-up payloads.
-- **Application:** none. No CAD repo contains `PaymentManager`.
-- **Root cause:** a bulk test insert into the error-log database. This is my reading of the data. Nobody has confirmed it.
-- **Impact:** any unfiltered dashboard or count is mostly fake errors and hides the real ones.
-- **Action:** find out who inserted it, delete it after a backup, keep test data out of the production error-log table, and exclude it in all queries until then.
-
 ---
 
 ## 5. Real code bugs found
