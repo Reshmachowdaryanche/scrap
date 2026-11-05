@@ -249,13 +249,16 @@ Each card: **Error / Why / Application / Root cause / Action.**
   ```
 - **Why:** Android cannot start the job because the app never declared it.
 - **Application:** Support Service.
-- **Root cause:**
-  1. At init, `SilentFullInitActivity` (line ~239) schedules `DisableGOLauncherJob` with `JobScheduler`.
-  2. The class exists, but `AndroidManifest.xml` has no `<service>` entry for it (the manifest declares other services, but not this one). Android rejects the schedule and the catch block logs the "No such service" message.
-  3. The job's purpose is to disable the old GoLauncher app when the Launcher is installed (`SupportFacade.setDisabledApplications`). Because it never runs, that disable step never happens on these builds.
-  4. Second defect: the period is 60 seconds (`setPeriodic(60 * 1000)`). Android's minimum is 15 minutes, so even when declared the job would not run every minute.
-- **Action:** declare the job in the manifest with `android:permission="android.permission.BIND_JOB_SERVICE"`, set the period to 15 minutes or more, and confirm that GoLauncher is disabled on a device with both apps.
-- **Not confirmed:** only this branch's manifest was checked, not every build flavour.
+- **Root cause (in simple steps):**
+  1. During start-up, the app tries to schedule a background job called `DisableGOLauncherJob`. This happens only in some start-ups, which is why the log shows it only 3 times.
+  2. For Android to run a job, the app must list it in its manifest file (`AndroidManifest.xml`). This job is not listed.
+  3. So Android refuses to schedule it and the app logs "No such service". The job never runs.
+  4. The job's task is to switch off the old GoLauncher app when the new Launcher is installed. That task does not happen through this job.
+  5. Second problem: the job is set to repeat every 60 seconds, but Android allows 15 minutes at the shortest. Even after the manifest is fixed, it would not run every minute.
+- **Action:** if job is required, add it to manifest . 
+- **Not confirmed:** only this repo's manifests were checked, not other build versions.
+
+
 
 ---
 
