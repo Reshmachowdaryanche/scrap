@@ -75,12 +75,12 @@ Each card: **Error / Why / Application / Root cause / Action.**
 
 ### BACKEND
 
-#### B1 – QA store-info returns 404 for two stores
+#### B1 – QA store-info returns 404 for stores 9771 and 7132
 - **Error:** store-info call fails with 404 and logs a full stack trace each time.
-- **Why:** the QA store-info server most likely has no data for these two stores. The app asks again every time because it saves the store only on success.
+- **Why:** the QA store-info server most likely has no data for stores 9771 and 7132. The app asks again every time because it saves the store only on success.
 - **Application:** Support Service.
 - **Root cause:** missing QA data (probably), plus a call with no timeout, no retry delay and a stack trace logged at ERROR. The app falls back to `en_US`.
-- **Action:** ask the store-info team to add the stores to QA, remember failures and retry later, log 404 as one short warning, and add a timeout.
+- **Action:** ask the store-info team to add stores 9771 and 7132 to QA (or give valid QA test stores), remember failures and retry later, log 404 as one short warning, and add a timeout.
 
 ### CONFIG / FILE
 
