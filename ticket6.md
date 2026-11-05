@@ -242,7 +242,7 @@ Each card: **Error / Why / Application / Root cause / Action.**
 
 
 
-##**O2.1 – Job service missing from the manifest (real bug)**
+**O2.1 – Job service missing from the manifest (real bug)**
 - **Error (as logged):**
   ```
   SilentFullInitActivity | No such service ComponentInfo{com.homedepot.sa.xp.firstphone.supportservice/com.homedepot.sa.xp.firstphone.supportservice.core.jobs.DisableGOLauncherJob}
@@ -257,9 +257,9 @@ Each card: **Error / Why / Application / Root cause / Action.**
 - **Action:** declare the job in the manifest with `android:permission="android.permission.BIND_JOB_SERVICE"`, set the period to 15 minutes or more, and confirm that GoLauncher is disabled on a device with both apps.
 - **Not confirmed:** only this branch's manifest was checked, not every build flavour.
 
+---
 
-
-##**O2.2 – "Permission to read serial number denied" can be wrong**
+**O2.2 – "Permission to read serial number denied" can be wrong**
 - **Error (as logged):**
   ```
   RetrieveOemInfo | ERROR: Permission to read serial number denied.
@@ -274,9 +274,9 @@ Each card: **Error / Why / Application / Root cause / Action.**
 - **Action:** log "no data returned", "provider not found" and "permission denied" as separate messages, close the cursor, and log the device model. Check on an affected Zebra device whether the app has access to the OEM provider.
 - **Not confirmed:** the real reason on the affected devices. A missing Zebra access grant is the likely cause, but it is not proven.
 
+---
 
-
-##**O2.3 – Normal events logged as ERROR**
+**O2.3 – Normal events logged as ERROR**
 - **Error (as logged):**
   ```
   GoConfigurationFacade | Loaded GoConfiguration from local resources.
@@ -291,9 +291,9 @@ Each card: **Error / Why / Application / Root cause / Action.**
   - "Invalid IP 0.0.0.0" means Wi-Fi is connected but has no address yet. This is a short transitional state, and it is also sent as an analytics event.
 - **Action:** log the first two at INFO and the third at WARNING. Keep ERROR for real failures.
 
+---
 
-
-##**O2.4 – "Encryption key cannot be null or empty" (caller now traced)**
+**O2.4 – "Encryption key cannot be null or empty" (caller now traced)**
 - **Error (as logged):**
   ```
   ActionHandlerReceiver | Error: Encryption key cannot be null or empty
