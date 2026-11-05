@@ -264,15 +264,16 @@ Each card: **Error / Why / Application / Root cause / Action.**
   ```
   RetrieveOemInfo | ERROR: Permission to read serial number denied.
   ```
-- **Why:** the app could not read the device serial from the Zebra OEM provider, but the message guesses the reason.
-- **Application:** Support Service (Zebra platform).
-- **Root cause:**
-  1. `ZebraPlatform` reads the serial and Wi-Fi MAC from the Zebra provider `content://oem_info/oem.zebra.secure/build_serial` through `RetrieveOemInfo.getSerial()`.
-  2. `getSerial()` logs "Permission denied" whenever the cursor is null or has no rows (`cursor == null || cursor.count < 1`). A missing permission, a missing provider and an empty answer all look the same in the log.
-  3. The caller only saves the serial and MAC (into `DeviceInfoProvider`) when the result is not null, so on failure the other apps do not get them from this path.
-  4. Small leak: when the cursor has no rows it returns without closing the cursor.
-- **Action:** log "no data returned", "provider not found" and "permission denied" as separate messages, close the cursor, and log the device model. Check on an affected Zebra device whether the app has access to the OEM provider.
-- **Not confirmed:** the real reason on the affected devices. A missing Zebra access grant is the likely cause, but it is not proven.
+- **Why:** the app could not read the device serial number, and the message blames permission without knowing that this is the reason.
+- **Application:** Support Service (Zebra devices).
+- **Root cause (in simple steps):**
+  1. At start-up the app asks the Zebra system for the device serial number.
+  2. Before asking, it requests permission from Zebra and waits up to 60 seconds. If the permission is not ready in time, it asks anyway.
+  3. If the answer is empty, the app writes "Permission denied". But an empty answer has several possible reasons: permission missing, the Zebra service not available, or simply no data. The app cannot tell them apart, so the message may be wrong.
+  4. When the read fails, the serial is not saved. Other apps that ask the Support Service for the serial then get "unknown".
+  5. Small code issue: when the answer is empty, the app does not close it (a resource leak).
+- **Most likely cause:** the permission step failed or was late on those devices. This is not proven.
+- **Action:** write a separate message for each case (no permission, service not found, no data), close the answer properly, and log whether the permission step worked. Then check one affected device.
 
 ---
 
